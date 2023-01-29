@@ -7,7 +7,7 @@ INC 	= 	-I./ \
 				
 
 LIB 		=		-L"/usr/local/lib" -lopencv_core -lopencv_highgui -lopencv_imgproc \
-				-L "/usr/lib" -l fftw3f
+				-L "/usr/lib" -lfftw3f_omp -lfftw3f -lm
 				
 .PHONY: clean
 

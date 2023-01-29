@@ -8,7 +8,7 @@
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
 #include <fftw3.h>
-
+#include <omp.h>
 typedef struct float2 {
 	float x;
 	float y;
@@ -26,8 +26,8 @@ float cuCimagf (cplx x) {
 	return x.y;
 }
 
+double lap_time(const char *);
 double start_timer();
-double lap_time(const char *msg);
 void readHeaderFile(char *filen, int * dims);
 int readCflFile(char *file, cplx* data);
 void getSpecificSliceData(cplx* input, cplx* out, cplx* rawOut, int spec_slice, int spec_bit, const int *dim, int x_new, int y_new, float* times);
@@ -36,6 +36,7 @@ int DoDisplayImage2CV(float* dataRaw, float* dataRecons, int xdim, int ydim, int
 void circshift(cplx *out, cplx *in, int xdim, int ydim, int bitdim, int xshift, int yshift, int numSlice);
 void DoRSSCPU(cplx* input, float* out, int N, int x, int y, int bitdim, int numSlice);
 int DoRECONSOperation( cplx* DatafftOneSlice, float* out, int *dim, int numSlice, float* times);
+int nthreads = 1;
 
 float cuCabsf(cplx x){
     float a = cuCrealf(x);
@@ -79,6 +80,7 @@ int main(int argc, char* argv[])
 	int slice = atoi(argv[2]);
 	int numSlice = atoi(argv[3]);
 	int new_x = atoi(argv[4]);
+        nthreads = atoi(argv[5]);
 	if (new_x < 512)
 	{
 		cout << "ZIP Dimension Less than 512" << endl;
@@ -111,6 +113,7 @@ int main(int argc, char* argv[])
 		cout << "Error on Reading CFL File" << endl;
 		return 1;
 	}
+//	CPU_start1  = (float)start_timer();
 	int xdim = dim[0];
 	int ydim = dim[1];
 	int bitdim = dim[3];
@@ -135,7 +138,9 @@ int main(int argc, char* argv[])
 	ydim = dim[1];
 	bitdim = dim[3];
 	int sizeManyImage = xdim*ydim*numSlice;
+//	CPU_end1 = clock();
 	float CPUTimer_getspec = timesRaw[0] + timesRaw[1];
+	CPU_start1  = (float)start_timer();
 	float* dataFFT_F = (float*)malloc(nBytes_F);
 	int retCUFFT = DoRECONSOperation(dataManySlice, dataFFT_F, Newdim, numSlice, timesRecons);
 	if(retCUFFT == 1)
@@ -143,11 +148,12 @@ int main(int argc, char* argv[])
 		cout << "CPU RECONSTRUCTION Operation is FAILED" << endl;
 		return 1;
 	}
+	CPU_end1 = (float)lap_time("DoRECONSOPs time : ");
 	float CPUTimer_fft = timesRecons[0]+timesRecons[1]+timesRecons[2]+timesRecons[3];
 	CPU_start1  = (float)start_timer();
 	float *rss = (float*)malloc(nBytes_FRSS);
 	DoRSSCPU(dataManySliceRaw, rss, sizeManyImage, xdim, ydim, bitdim, numSlice);
-	float CPUTimer_RSS = (float)lap_time("");
+	float CPUTimer_RSS = (float)lap_time("DoRSSCPU raw data : ");
 	float CPUTimer = CPUTimer_getspec + CPUTimer_fft + CPUTimer_RSS;
 	cout << "==========================================================================================================" << endl;
 	cout << "<path/filename> <Start Slice> <Number Slice Per Operatio> <New X dimension (Zero Filled Dimension)>" << endl;
@@ -163,12 +169,12 @@ int main(int argc, char* argv[])
 	cout << "Timing - RAW Operation on CPU Processor : " << std::to_string(CPUTimer_RSS*1000) << " ms" << endl;
 	cout << "CPU Timing using CPU Timer : " << std::to_string(CPUTimer*1000) << " ms" << endl;
 	cout << "==========================================================================================================" << endl;
-	int retCV = DoDisplayImage2CV(rss, dataFFT_F, xdim, ydim, slice, xdim_new, numSlice);
-	if(retCV == 1)
-	{
-		cout << "Display Image is Failed" << endl;
-		return 1;
-	}
+//	int retCV = DoDisplayImage2CV(rss, dataFFT_F, xdim, ydim, slice, xdim_new, numSlice);
+//	if(retCV == 1)
+//	{
+//		cout << "Display Image is Failed" << endl;
+//		return 1;
+//	}
 	free(filename);
 	free(dim);
 	free(Newdim);
@@ -265,7 +271,7 @@ void getSpecificSliceData(cplx* input, cplx* out, cplx* rawOut, int spec_slice, 
 			}
 		}
 	}
-	times[0] = (float)lap_time("get specific slice time[0] : ");
+	times[0] = (float)lap_time("");
 	start_timer();
 	for(int m = 0; m < bitdim; m++)
 	{
@@ -280,14 +286,18 @@ void getSpecificSliceData(cplx* input, cplx* out, cplx* rawOut, int spec_slice, 
 			}
 		}
 	}
-	times[1] = (float)lap_time("get specific slice time[1] ");
+	times[1] = (float)lap_time("");
 }
 void DoRSSCPU(cplx* input, float* out, int N, int x, int y, int bitdim, int numSlice)
 {
 	float *temp = (float*)malloc(sizeof(float)*N);
-	for(int i = 0; i < numSlice; i++)
+        double start,end;
+        std::cout << "bitdim " << bitdim << endl;
+        start = omp_get_wtime();
+        #pragma omp parallel for schedule(static,1) num_threads(nthreads)
+	for(int m = 0; m < bitdim; m++)
 	{
-		for(int m = 0; m < bitdim ; m++)
+		for(int i = 0; i < numSlice ; i++)
 		{
 			for(int j = 0; j < y; j++)
 			{
@@ -300,6 +310,7 @@ void DoRSSCPU(cplx* input, float* out, int N, int x, int y, int bitdim, int numS
 			}
 		}
 	}
+        #pragma omp parallel for schedule(static,1) num_threads(nthreads)
 	for(int i = 0; i < numSlice ; i++)
 	{
 		for(int j = 0; j < y; j++)
@@ -311,6 +322,7 @@ void DoRSSCPU(cplx* input, float* out, int N, int x, int y, int bitdim, int numS
 			}
 		}
 	}
+        printf("DoRSS wall time : %lf\n",omp_get_wtime()-start);
 	free(temp);
 }
 int DoDisplayImage2CV(float* dataRaw, float* dataRecons, int xdim, int ydim, int spec_slice, int zipdimx, int numSlice)
@@ -375,6 +387,8 @@ int DoRECONSOperation( cplx* DatafftManySlice, float* out, int *dim, int numSlic
 	int ostride = 1;
 	int *onembed = NULL;
 	int *inembed = NULL;
+        fftwf_init_threads();
+        fftwf_plan_with_nthreads(nthreads);
 	pfftw = fftwf_plan_many_dft(RANK, n, howmany, 
 								reinterpret_cast<fftwf_complex*>(DatafftManySlice),
 								inembed, istride, idist, 
@@ -384,19 +398,20 @@ int DoRECONSOperation( cplx* DatafftManySlice, float* out, int *dim, int numSlic
 								FFTW_ESTIMATE);
 	fftwf_execute(pfftw);
 	fftwf_destroy_plan(pfftw);
-	fftwf_cleanup();
-    times[0] = (float)lap_time("fftw time[0]");
+	fftwf_cleanup_threads();
+    times[0] = (float)lap_time("waktu eksekusi fft : ");
     start_timer();
 	memcpy(temp_in, DatafftManySlice, nBytes_C);
 	fftshift(DatafftManySlice, temp_in, xdim, ydim, bitdim, numSlice);
 	free(temp_in);
-    times[1] = (float)lap_time("fft time[1] ");
+    times[1] = (float)lap_time("waktu eksekusi fftshift ");
     start_timer();
 	DoRSSCPU(DatafftManySlice, out, sizeManyImage, xdim, ydim, bitdim, numSlice);
-    times[2] = (float)lap_time("DoRSSCPU time :");
+    times[2] = (float)lap_time("waktu eksekusi DoRSSCPU :");
     start_timer();
 	dataScaling(out, sizeManyImage);
-    times[3] = (float)lap_time("Data scaling time ");
+	end = clock();
+    times[3] = (float)lap_time("data scaling");
 	return 0;
 }
 void circshift(cplx *out, cplx *in, int xdim, int ydim, int bitdim, int xshift, int yshift, int numSlice)
